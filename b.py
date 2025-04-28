@@ -110,7 +110,7 @@ def parse(s: str, p: Lexer, level: int = 0):
         if s[p.l] in [")", " ", "{"]:
             p = shift(p, 1)
 
-        if s[p.l] in ["\n", ";"]:
+        if s[p.r] in ["\n", ";"]:
             p = shift(p, 2)
 
         if s[p.l] == "}":
