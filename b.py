@@ -71,18 +71,17 @@ class FilePosition:
 
 
 def index_to_file_position(index: int, s: str) -> FilePosition:
-    assert index < len(s)
-    lines = s.split("\n")
-    line_count = 0
-    index_count = 0
-    for line in lines:
-        line_count += 1
-        if index_count + len(line) + 1 < index:
-            index_count += len(line) + 1 # \n counts as one
+    count = 0
+    line = 1
+    for i, char in enumerate(s):
+        if char == "\n":
+            count = 0
+            line += 1
         else:
-            index_count += len(line) + 1 - index + 2
-            return FilePosition(line=line_count, column=index_count)
-    raise ValueError("ERROR: could not locate position in file.")
+            count += 1
+        if i == index:
+            return FilePosition(line=line, column=count)
+    raise ValueError("ERROR: could not locate index in file.")
 
 
 def advance(p: Lexer) -> Lexer:
