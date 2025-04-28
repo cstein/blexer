@@ -95,38 +95,36 @@ def shift_right(p: Lexer) -> Lexer:
 
 def parse(s: str, p: Lexer, level: int = 0):
 
-    indent = " "*(level +2)
+    indent = " " * (level +2)
     while True:
 
-        if s[p.l] == ")":
-            p = shift_right(p)
+        if s[p.l] in [")", " ", "{"]:
+            p = shift(p, 1)
 
-        if s[p.l] == " ":
-            p = shift_right(p)
-
-        if s[p.l] == "{":
-            p = shift_right(p)
-
-        if s[p.r] == "\n":
-            p = shift(p, 2)
-
-        if s[p.r] == ";":
+        if s[p.l] in ["\n", ";"]:
             p = shift(p, 2)
 
         if s[p.l] == "}":
             return None
 
         p = advance(p)
+
+        # parse functions
         if s[p.r] == "(":
-            token = s[p.l:p.r]
-            # print(f"  {indent:s}function :: NAME at [l, r] = [{p.l:d}, {p.r:d}] content = '{token:s}'")
+            function_name = s[p.l:p.r]
+            # print(f"  {indent:s}function :: NAME at [l, r] = [{p.l:d}, {p.r:d}] content = '{function_name:s}'")
+
+            # we reset the lexer p to the right hand pointer
+            # so we can parse any function arguments
             p.l = p.r
-            args = parse(s, p, level +2)
-            operations.append(FunctionCall(name=token, args=args))
-            offset = 0
+            args = parse(s, p, level +2)  # TODO: maybe make specific parser for arguments
+            operations.append(FunctionCall(name=function_name, args=args))
+
+            # we shift to the end of the parsing of the argument
+            offset = 1
             if args is not None:
                 offset += len(str(args))
-            p = shift(Lexer(p.r, p.r), offset+1)
+            p = shift(Lexer(p.r, p.r), offset)
 
         if s[p.r] == " " or s[p.r] == ";":
             token = s[p.l:p.r]
@@ -137,7 +135,7 @@ def parse(s: str, p: Lexer, level: int = 0):
             if is_keyword(token):
                 # print(f"  {indent:s}token :: KEYWORD at [l, r] = [{p.l:d}, {p.r:d}] content = '{token:s}'")
                 p.l = p.r
-                variable_name = parse(s, p, level +2)
+                variable_name = parse(s, p, level +2)  # TODO: maybe make specific parser for variables
                 if token == "extrn":
                     if existing_var := variable_exists(variable_name):
                         new_position = index_to_file_position(p.r+1, s)
@@ -152,16 +150,20 @@ def parse(s: str, p: Lexer, level: int = 0):
                 # print(f"  {indent:s}token :: NAME at [l, r] = [{p.l:d}, {p.r:d}] content = '{token:s}'")
                 return token
     
+        # this thing parses arguments to functions
         if s[p.r] == ")":
             if s[p.l] == "(":
                 token = s[p.l+1:p.r]
                 # print(f"  {indent:s}function :: ARGUMENT = at [l, r] = [{p.l:d}, {p.r:d}] content = '{token:s}'")
+
+                # no argument
                 if p.r - p.l == 1:
                     return None
                 else:
                     token = s[p.l+1:p.r]
                     return int(token)
     
+        # exit if we are at the end of the code
         if p.r == len(s) -1:
             break
 
