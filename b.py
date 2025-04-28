@@ -6,7 +6,7 @@ import os
 
 
 DEBUG = False
-B_KEYWORDS = ["extrn"]
+B_KEYWORDS = ["extrn", "auto"]
 
 
 def is_keyword(keyword: str) -> bool:
@@ -47,7 +47,12 @@ class ExternVariable:
     name: str
 
 
-Operations = FunctionCall | ExternVariable
+@dataclass
+class AutoAlloc:
+    usize: int
+
+
+Operations = FunctionCall | ExternVariable | AutoAlloc
 
 
 # lexer for parsing
@@ -149,7 +154,14 @@ def parse(s: str, p: Lexer, level: int = 0):
                     if existing_var := variable_exists(variable_name):
                         bomb_out(variable_name, p.r+1, existing_var.where, s)
                     operations.append(ExternVariable(name=variable_name))
-                    variables.append(Variable(name=variable_name, index=0, where=p.r+1, storage=Storage.external))
+                    variables.append(Variable(name=variable_name, index=-1, where=p.r+1, storage=Storage.external))
+                if token == "auto":
+                    if existing_var := variable_exists(variable_name):
+                        bomb_out(variable_name, p.r+1, existing_var.where, s)
+                    operations.append(AutoAlloc(usize=1))
+                    n_existing_auto = len([v for v in variables if v.storage == Storage.auto])
+                    variables.append(Variable(name=variable_name, index=n_existing_auto, where=p.r+1, storage=Storage.auto))
+
                 # we shift to after the keyword
                 p = shift(Lexer(p.r, p.r), len(variable_name)+2)
 
@@ -196,6 +208,8 @@ def compile_source():
                 s += "    {0:s}({1:d})\n".format(op.name, op.args)
         elif type(op) is ExternVariable:
            s += "    from extrn import {0:s}\n".format(op.name)
+        elif type(op) is AutoAlloc:
+            s += f"    variables.append(0)\n"
         else:
            raise ValueError(f"Operation '{type(op):s}' not supported")
 
@@ -223,7 +237,7 @@ Provides a minimal standard library.
 
     print("-----------------------")
     print(" B-COMPILER by CSTEIN  ")
-    print("    v. 0.0a            ")
+    print("    v. 0.0b            ")
     print("                       ")
     print("-----------------------")
     print("                       ")
@@ -232,10 +246,10 @@ Provides a minimal standard library.
     # print("\n----   lexer   ----\n")
     p = Lexer(l = 0, r = 0)
     parse(s, p)
-    # print("\n---- functions ----\n")
-    # print(operations)
-    # print("\n---- variables ----\n")
-    # print(variables)
+    if DEBUG: print("\n---- functions ----\n")
+    if DEBUG: print(operations)
+    if DEBUG: print("\n---- variables ----\n")
+    if DEBUG: print(variables)
     print("\n--- compiled source ---\n")
     output = compile_source()
     if args.output is not None:
