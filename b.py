@@ -5,6 +5,7 @@ from enum import Enum
 import os
 
 
+DEBUG = False
 B_KEYWORDS = ["extrn"]
 
 
@@ -84,6 +85,13 @@ def index_to_file_position(index: int, s: str) -> FilePosition:
     raise ValueError("ERROR: could not locate index in file.")
 
 
+def bomb_out(variable_name: str, index_old: int, index_new: int, s: str):
+    new_position = index_to_file_position(index_old, s)
+    old_position = index_to_file_position(index_new, s)
+    print(f"ERROR: Variable '{variable_name:s}' at line {new_position.line:d} column {new_position.column:d} is already defined at line {old_position.line:d} column {old_position.column:d}")
+    exit(1)
+
+
 def advance(p: Lexer) -> Lexer:
     return Lexer(l = p.l, r = p.r + 1)
 
@@ -97,6 +105,7 @@ def parse(s: str, p: Lexer, level: int = 0):
 
     indent = " " * (level +2)
     while True:
+        if DEBUG: print(f"[l, r] = [{p.l:d}, {p.r:d}]   ->   '{s[p.l:p.r]:s}'")
 
         if s[p.l] in [")", " ", "{"]:
             p = shift(p, 1)
@@ -112,7 +121,7 @@ def parse(s: str, p: Lexer, level: int = 0):
         # parse functions
         if s[p.r] == "(":
             function_name = s[p.l:p.r]
-            # print(f"  {indent:s}function :: NAME at [l, r] = [{p.l:d}, {p.r:d}] content = '{function_name:s}'")
+            if DEBUG: print(f"  {indent:s}function :: NAME at [l, r] = [{p.l:d}, {p.r:d}] content = '{function_name:s}'")
 
             # we reset the lexer p to the right hand pointer
             # so we can parse any function arguments
@@ -128,33 +137,31 @@ def parse(s: str, p: Lexer, level: int = 0):
 
         if s[p.r] == " " or s[p.r] == ";":
             token = s[p.l:p.r]
-            if token == " ":
+            if token.isspace():
                 p = shift_right(p)
                 continue
 
             if is_keyword(token):
-                # print(f"  {indent:s}token :: KEYWORD at [l, r] = [{p.l:d}, {p.r:d}] content = '{token:s}'")
+                if DEBUG: print(f"  {indent:s}token :: KEYWORD at [l, r] = [{p.l:d}, {p.r:d}] content = '{token:s}'")
                 p.l = p.r
                 variable_name = parse(s, p, level +2)  # TODO: maybe make specific parser for variables
                 if token == "extrn":
                     if existing_var := variable_exists(variable_name):
-                        new_position = index_to_file_position(p.r+1, s)
-                        old_position = index_to_file_position(existing_var.where, s)
-                        print(f"ERROR: Variable '{variable_name:s}' at line {new_position.line:d} column {new_position.column:d} is already defined at line {old_position.line:d} column {old_position.column:d}")
-                        exit(1)
+                        bomb_out(variable_name, p.r+1, existing_var.where, s)
                     operations.append(ExternVariable(name=variable_name))
                     variables.append(Variable(name=variable_name, index=0, where=p.r+1, storage=Storage.external))
                 # we shift to after the keyword
                 p = shift(Lexer(p.r, p.r), len(variable_name)+2)
+
             else:
-                # print(f"  {indent:s}token :: NAME at [l, r] = [{p.l:d}, {p.r:d}] content = '{token:s}'")
+                if DEBUG: print(f"  {indent:s}token :: NAME at [l, r] = [{p.l:d}, {p.r:d}] content = '{token:s}'")
                 return token
     
         # this thing parses arguments to functions
         if s[p.r] == ")":
             if s[p.l] == "(":
                 token = s[p.l+1:p.r]
-                # print(f"  {indent:s}function :: ARGUMENT = at [l, r] = [{p.l:d}, {p.r:d}] content = '{token:s}'")
+                if DEBUG: print(f"  {indent:s}function :: ARGUMENT = at [l, r] = [{p.l:d}, {p.r:d}] content = '{token:s}'")
 
                 # no argument
                 if p.r - p.l == 1:
