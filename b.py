@@ -30,16 +30,28 @@ class Variable:
     storage: Storage
 
 
-# functions
+# functions can have arguments
 class Arg:
-    def __init__(self, name, value):
-        self.value = value
+    pass
+
+
+@dataclass
+class AutoVariable(Arg):
+    index: int
+
+
+@dataclass
+class Literal(Arg):
+    value: int
+
+
+ArgumentType = AutoVariable | Literal
 
 
 @dataclass
 class FunctionCall:
     name: str
-    args: list[Arg] | None
+    args: list[ArgumentType] | None
 
 
 @dataclass
@@ -52,7 +64,13 @@ class AutoAlloc:
     usize: int
 
 
-Operations = FunctionCall | ExternVariable | AutoAlloc
+@dataclass
+class AutoAssign:
+    index: int
+    value: ArgumentType
+
+
+Operations = FunctionCall | ExternVariable | AutoAlloc | AutoAssign
 
 
 # lexer for parsing
@@ -61,14 +79,18 @@ class Lexer():
     l: int = 0
     r: int = 0
 
+
+# TODO: make these local to the parser, and return them to the actual compiler instead of globals
 operations: list[Operations] = []
 variables: list[Variable] = []
+
 
 def variable_exists(name: str) -> Variable | None:
     for var in variables:
         if var.name == name:
             return var
     return None
+
 
 @dataclass
 class FilePosition:
@@ -100,26 +122,122 @@ def bomb_out(variable_name: str, index_old: int, index_new: int, s: str):
 def advance(p: Lexer) -> Lexer:
     return Lexer(l = p.l, r = p.r + 1)
 
+
 def shift(p: Lexer, n: int) -> Lexer:
     return Lexer(p.l + n, p.r + n)
+
 
 def shift_right(p: Lexer) -> Lexer:
     return shift(p, 1)
 
-def parse(s: str, p: Lexer, level: int = 0):
+def shift_to_end_of_expression(s: str, p: Lexer) -> Lexer:
+    while s[p.r] not in ["\n", ";"]:
+        p = advance(p)
+    return shift(Lexer(p.r, p.r), 0)
 
+
+def parse_function_argument(s: str, p: Lexer, level: int = 0) -> ArgumentType | None:
+    indent = " " * (level +2)
+    assert s[p.l] == "("
+    while True:
+        if DEBUG: print(f"[l, r] = [{p.l:d}, {p.r:d}]   ->   '{s[p.l:p.r]:s}'")
+
+        if s[p.l] == "}":
+            raise ValueError("did not expect end of function.")
+
+        p = advance(p)
+
+        if s[p.r] == ")":
+            if s[p.l] == "(":
+                token = s[p.l+1:p.r]
+                if DEBUG: print(f"  {indent:s}function :: ARGUMENT = at [l, r] = [{p.l:d}, {p.r:d}] content = '{token:s}'")
+
+                if p.r - p.l == 1:
+                    return None
+                else:
+                    # check if it is either a literal
+                    token = s[p.l+1:p.r]
+                    try:
+                        value = int(token)
+                    except ValueError:
+                        # expression or variable
+                        if existing_var := variable_exists(token):
+                            return AutoVariable(index=existing_var.index)
+                        else:
+                            raise ValueError(f"Variable '{token:s}' is not defined")
+                    else:
+                        return Literal(value=value)
+
+
+def parse_variable(s: str, p: Lexer, level: int = 0) -> str:
+    indent = " " * (level +2)
+    while True:
+        if DEBUG: print(f"{indent:s}[l, r] = [{p.l:d}, {p.r:d}]   ->   '{s[p.l:p.r]:s}'")
+        if s[p.r] in ["\n", ";"]:
+            p = shift(p, 2)
+            continue
+
+        if s[p.l] == "}":
+            return None
+
+        p = advance(p)
+
+        if s[p.r] == " " or s[p.r] == ";":
+            token = s[p.l:p.r]
+            if is_keyword(token):
+                raise ValueError("This was not expected.")
+
+            if DEBUG: print(f"  {indent:s}variable :: NAME = at [l, r] = [{p.l:d}, {p.r:d}] content = '{token:s}'")
+            return token
+
+
+def parse_operation(s: str, p: Lexer):
+    indent = "      parse_operation :: "
+    while True:
+        if DEBUG: print(f"{indent:s}[l, r] = [{p.l:d}, {p.r:d}]   ->   '{s[p.l:p.r]:s}'")
+        if s[p.l] in [")", " ", "{"]:
+            p = shift(p, 1)
+            continue
+
+        if s[p.r] in ["\n", ";"]:
+            # end of expression - for now, we just die rather gracefully
+            raise ValueError(f"got either newline (\\n) or end of expression (;) while parsing.")
+
+        if s[p.l] == "=":
+            # lets find the end of the expression (i.e., locate the ";")
+            p = shift(p, 1)
+            while s[p.r] not in ["\n", ";"]:
+                p = advance(p)
+
+            token = s[p.l:p.r]
+            # we first try a literal
+            try:
+                value = int(token)
+            except ValueError:
+                # we are parsing an expression
+                raise NotImplementedError("Only literals are implemented now.")
+            else:
+                # we have a literal
+                return AutoAssign, Literal(value=value)
+            return None
+
+
+def parse(s: str, p: Lexer, level: int = 0):
     indent = " " * (level +2)
     while True:
         if DEBUG: print(f"[l, r] = [{p.l:d}, {p.r:d}]   ->   '{s[p.l:p.r]:s}'")
 
+        if s[p.l] == "}":
+            return
+
         if s[p.l] in [")", " ", "{"]:
             p = shift(p, 1)
+            continue
 
         if s[p.r] in ["\n", ";"]:
             p = shift(p, 2)
+            continue
 
-        if s[p.l] == "}":
-            return None
 
         p = advance(p)
 
@@ -131,14 +249,20 @@ def parse(s: str, p: Lexer, level: int = 0):
             # we reset the lexer p to the right hand pointer
             # so we can parse any function arguments
             p.l = p.r
-            args = parse(s, p, level +2)  # TODO: maybe make specific parser for arguments
-            operations.append(FunctionCall(name=function_name, args=args))
+            args = parse_function_argument(s, p, level +2)
+            match args:
+                case None:
+                    operations.append(FunctionCall(name=function_name, args=args))
+                case Literal(value):
+                    operations.append(FunctionCall(name=function_name, args=args))
+                case AutoVariable(index):
+                    operations.append(FunctionCall(name=function_name, args=args))
+                case _:
+                    raise ValueError(f"could not parse argument")
 
             # we shift to the end of the parsing of the argument
-            offset = 1
-            if args is not None:
-                offset += len(str(args))
-            p = shift(Lexer(p.r, p.r), offset)
+            p = shift_to_end_of_expression(s, p)
+            continue
 
         if s[p.r] == " " or s[p.r] == ";":
             token = s[p.l:p.r]
@@ -147,17 +271,18 @@ def parse(s: str, p: Lexer, level: int = 0):
                 continue
 
             if is_keyword(token):
-                if DEBUG: print(f"  {indent:s}token :: KEYWORD at [l, r] = [{p.l:d}, {p.r:d}] content = '{token:s}'")
+                if DEBUG: print(f"  {indent:s}keyword :: NAME at [l, r] = [{p.l:d}, {p.r:d}] content = '{token:s}'")
                 p.l = p.r
-                variable_name = parse(s, p, level +2)  # TODO: maybe make specific parser for variables
+                p = shift(p, 1)
+                variable_name = parse_variable(s, p, level +2)  # TODO: maybe make specific parser for variables
+                if existing_var := variable_exists(variable_name):
+                    bomb_out(variable_name, p.r+1, existing_var.where, s)
+
                 if token == "extrn":
-                    if existing_var := variable_exists(variable_name):
-                        bomb_out(variable_name, p.r+1, existing_var.where, s)
                     operations.append(ExternVariable(name=variable_name))
                     variables.append(Variable(name=variable_name, index=-1, where=p.r+1, storage=Storage.external))
+
                 if token == "auto":
-                    if existing_var := variable_exists(variable_name):
-                        bomb_out(variable_name, p.r+1, existing_var.where, s)
                     operations.append(AutoAlloc(usize=1))
                     n_existing_auto = len([v for v in variables if v.storage == Storage.auto])
                     variables.append(Variable(name=variable_name, index=n_existing_auto, where=p.r+1, storage=Storage.auto))
@@ -166,22 +291,34 @@ def parse(s: str, p: Lexer, level: int = 0):
                 p = shift(Lexer(p.r, p.r), len(variable_name)+2)
 
             else:
+                # if it is *not* a keyword, it could be a variable assignment
                 if DEBUG: print(f"  {indent:s}token :: NAME at [l, r] = [{p.l:d}, {p.r:d}] content = '{token:s}'")
-                return token
-    
-        # this thing parses arguments to functions
-        if s[p.r] == ")":
-            if s[p.l] == "(":
-                token = s[p.l+1:p.r]
-                if DEBUG: print(f"  {indent:s}function :: ARGUMENT = at [l, r] = [{p.l:d}, {p.r:d}] content = '{token:s}'")
 
-                # no argument
-                if p.r - p.l == 1:
-                    return None
+                # we check for existing variable with the same name
+                if variable := variable_exists(token):
+                    if variable.storage == Storage.external:
+                        print(f"ERROR: Cannot assign value to variable '{variable.name:s}' because it is declared external.")
+                        exit(1)
+
+                    elif variable.storage == Storage.auto:
+                        p.l = p.r-1
+                        # here we scan for assignment first I suppose? or do we scan for some operation?
+                        op, rhs = parse_operation(s, shift(p,1))
+                        if type(rhs) is Literal:
+                            operations.append(AutoAssign(index=variable.index, value = rhs))
+                        else:
+                            raise NotImplementedError("Not implemented yet.")
+                        print(p)
+                        p = shift_to_end_of_expression(s, p)
+                    else:
+                        print(f"ERROR: Variable '{variable.name:s}' has unspecified storage.")
+                        exit(1)
+
                 else:
-                    token = s[p.l+1:p.r]
-                    return int(token)
-    
+                   position = index_to_file_position(p.l, s)
+                   print(f"ERROR: variable '{token:s}' at line {position.line:d} column {position.column:d} is not declared.")
+                   exit(1)
+
         # exit if we are at the end of the code
         if p.r == len(s) -1:
             break
@@ -204,14 +341,21 @@ def compile_source():
         if type(op) is FunctionCall:
             if op.args is None:
                 s += "    {0:s}()\n".format(op.name)
+            elif type(op.args) is Literal:
+                s += "    {0:s}({1:d})\n".format(op.name, op.args.value)
+            elif type(op.args) is AutoVariable:
+                s += "    {0:s}(variables[{1:d}])\n".format(op.name, op.args.index)
             else:
-                s += "    {0:s}({1:d})\n".format(op.name, op.args)
+                raise ValueError("type not understood.")
+
         elif type(op) is ExternVariable:
-           s += "    from extrn import {0:s}\n".format(op.name)
+            s += "    from extrn import {0:s}\n".format(op.name)
         elif type(op) is AutoAlloc:
             s += f"    variables.append(0)\n"
+        elif type(op) is AutoAssign:
+            s += "    variables[{0:d}] = {1:d}\n".format(op.index, op.value.value)
         else:
-           raise ValueError(f"Operation '{type(op):s}' not supported")
+           raise ValueError(f"Operation '{str(type(op)):s}' not supported")
 
     # make_epilog()
     # the epilog in python is the magic that makes it run
