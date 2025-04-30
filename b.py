@@ -308,7 +308,6 @@ def parse(s: str, p: Lexer, level: int = 0):
                             operations.append(AutoAssign(index=variable.index, value = rhs))
                         else:
                             raise NotImplementedError("Not implemented yet.")
-                        print(p)
                         p = shift_to_end_of_expression(s, p)
                     else:
                         print(f"ERROR: Variable '{variable.name:s}' has unspecified storage.")
@@ -322,6 +321,7 @@ def parse(s: str, p: Lexer, level: int = 0):
         # exit if we are at the end of the code
         if p.r == len(s) -1:
             break
+
 
 def compile_source():
     # make_prolog()
