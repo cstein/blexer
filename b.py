@@ -3,25 +3,36 @@ from argparse import ArgumentParser
 from dataclasses import dataclass
 from enum import Enum
 import os
+import sys
 
 
 DEBUG = False
 B_KEYWORDS = ["extrn", "auto"]
 
 
+def exit_with_error(error: str) -> None:
+    """ Exits the compiler with an error
+
+        :param error: the error to report to the user
+    """
+    print(error)
+    sys.exit(1)
+
+
 def is_keyword(keyword: str) -> bool:
     return keyword in B_KEYWORDS
 
-# where do we store variables
-# auto     is that we manage memory and keep track of that
-# external is that it must defined somewhere else and
-#          it is up to the user to have it defined
+
 class Storage(Enum):
-    auto: int = 1
-    external: int = 2
+    """ Specifies where variables are stored.
+
+        :cvar AUTO: we manage memory and keep track of it using an internal stack
+        :cvar EXTERNAL: it must defined somewhere else and it is up to the user to have it defined
+    """
+    AUTO: int = 1
+    EXTERNAL: int = 2
 
 
-# variables
 @dataclass
 class Variable:
     name: str
@@ -31,17 +42,17 @@ class Variable:
 
 
 # functions can have arguments
-class Arg:
+class Argument:
     pass
 
 
 @dataclass
-class AutoVariable(Arg):
+class AutoVariable(Argument):
     index: int
 
 
 @dataclass
-class Literal(Arg):
+class Literal(Argument):
     value: int
 
 
@@ -115,8 +126,7 @@ def index_to_file_position(index: int, s: str) -> FilePosition:
 def bomb_out(variable_name: str, index_old: int, index_new: int, s: str):
     new_position = index_to_file_position(index_old, s)
     old_position = index_to_file_position(index_new, s)
-    print(f"ERROR: Variable '{variable_name:s}' at line {new_position.line:d} column {new_position.column:d} is already defined at line {old_position.line:d} column {old_position.column:d}")
-    exit(1)
+    exit_with_error(f"ERROR: Variable '{variable_name:s}' at line {new_position.line:d} column {new_position.column:d} is already defined at line {old_position.line:d} column {old_position.column:d}")
 
 
 def advance(p: Lexer) -> Lexer:
@@ -215,7 +225,11 @@ def parse_operation(s: str, p: Lexer):
                 value = int(token)
             except ValueError:
                 # we are parsing an expression
-                raise NotImplementedError("Only literals are implemented now.")
+                variable_name = token.strip()
+                if existing_var := variable_exists(variable_name):
+                    return AutoAssign, AutoVariable(index=existing_var.index)
+                else:
+                    exit_with_error(f"ERROR: Cannot assign expression '{token.strip()}' to variable. Only literals or variables are implemented now.")
             else:
                 # we have a literal
                 return AutoAssign, Literal(value=value)
@@ -280,12 +294,12 @@ def parse(s: str, p: Lexer, level: int = 0):
 
                 if token == "extrn":
                     operations.append(ExternVariable(name=variable_name))
-                    variables.append(Variable(name=variable_name, index=-1, where=p.r+1, storage=Storage.external))
+                    variables.append(Variable(name=variable_name, index=-1, where=p.r+1, storage=Storage.EXTERNAL))
 
                 if token == "auto":
                     operations.append(AutoAlloc(usize=1))
-                    n_existing_auto = len([v for v in variables if v.storage == Storage.auto])
-                    variables.append(Variable(name=variable_name, index=n_existing_auto, where=p.r+1, storage=Storage.auto))
+                    n_existing_auto = len([v for v in variables if v.storage == Storage.AUTO])
+                    variables.append(Variable(name=variable_name, index=n_existing_auto, where=p.r+1, storage=Storage.AUTO))
 
                 # we shift to after the keyword
                 p = shift(Lexer(p.r, p.r), len(variable_name)+2)
@@ -296,27 +310,26 @@ def parse(s: str, p: Lexer, level: int = 0):
 
                 # we check for existing variable with the same name
                 if variable := variable_exists(token):
-                    if variable.storage == Storage.external:
-                        print(f"ERROR: Cannot assign value to variable '{variable.name:s}' because it is declared external.")
-                        exit(1)
+                    if variable.storage == Storage.EXTERNAL:
+                        exit_with_error(f"ERROR: Cannot assign value to variable '{variable.name:s}' because it is declared EXTERNAL.")
 
-                    elif variable.storage == Storage.auto:
+                    elif variable.storage == Storage.AUTO:
                         p.l = p.r-1
                         # here we scan for assignment first I suppose? or do we scan for some operation?
                         op, rhs = parse_operation(s, shift(p,1))
-                        if type(rhs) is Literal:
+                        if isinstance(rhs, Literal):
+                            operations.append(AutoAssign(index=variable.index, value = rhs))
+                        elif isinstance(rhs, AutoVariable):
                             operations.append(AutoAssign(index=variable.index, value = rhs))
                         else:
                             raise NotImplementedError("Not implemented yet.")
                         p = shift_to_end_of_expression(s, p)
                     else:
-                        print(f"ERROR: Variable '{variable.name:s}' has unspecified storage.")
-                        exit(1)
+                        exit_with_error(f"ERROR: Variable '{variable.name:s}' has unspecified storage.")
 
                 else:
                    position = index_to_file_position(p.l, s)
-                   print(f"ERROR: variable '{token:s}' at line {position.line:d} column {position.column:d} is not declared.")
-                   exit(1)
+                   exit_with_error(f"ERROR: variable '{token:s}' at line {position.line:d} column {position.column:d} is not declared.")
 
         # exit if we are at the end of the code
         if p.r == len(s) -1:
@@ -334,28 +347,35 @@ def compile_source():
     # we start by defining variables
     s += "    variables = []\n"
     for variable in variables:
-        if variable.storage == Storage.external:
+        if variable.storage == Storage.EXTERNAL:
             continue
 
     for op in operations:
-        if type(op) is FunctionCall:
+        if isinstance(op, FunctionCall):
             if op.args is None:
                 s += "    {0:s}()\n".format(op.name)
-            elif type(op.args) is Literal:
+            elif isinstance(op.args, Literal):
                 s += "    {0:s}({1:d})\n".format(op.name, op.args.value)
-            elif type(op.args) is AutoVariable:
+            elif isinstance(op.args, AutoVariable):
                 s += "    {0:s}(variables[{1:d}])\n".format(op.name, op.args.index)
             else:
                 raise ValueError("type not understood.")
 
-        elif type(op) is ExternVariable:
+        elif isinstance(op, ExternVariable):
             s += "    from extrn import {0:s}\n".format(op.name)
-        elif type(op) is AutoAlloc:
-            s += f"    variables.append(0)\n"
-        elif type(op) is AutoAssign:
-            s += "    variables[{0:d}] = {1:d}\n".format(op.index, op.value.value)
+        elif isinstance(op, AutoAlloc):
+            s += "    variables.append(0)\n"
+        elif isinstance(op, AutoAssign):
+            # looks funky, but it is assignment (op) that takes an
+            match op.value:
+                case Literal(value):
+                    s += "    variables[{0:d}] = {1:d}\n".format(op.index, op.value.value)
+                case AutoVariable(index):
+                    s += "    variables[{0:d}] = variables[{1:d}]\n".format(op.index, op.value.index)
+                case _:
+                    raise ValueError("Assignment of expressions are not supported.")
         else:
-           raise ValueError(f"Operation '{str(type(op)):s}' not supported")
+            raise ValueError(f"Operation '{str(type(op)):s}' not supported")
 
     # make_epilog()
     # the epilog in python is the magic that makes it run
@@ -381,7 +401,7 @@ Provides a minimal standard library.
 
     print("-----------------------")
     print(" B-COMPILER by CSTEIN  ")
-    print("    v. 0.0b            ")
+    print("    v. 0.0c            ")
     print("                       ")
     print("-----------------------")
     print("                       ")
