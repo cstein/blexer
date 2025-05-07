@@ -102,6 +102,7 @@ class AutoAssign:
     index: int
     value: ArgumentType
 
+
 class Operation(Enum):
     """ Specifies the type of operation
 
@@ -125,7 +126,7 @@ class AutoBinaryOperation:
     rhs: ArgumentType
 
 
-Operations = FunctionCall | ExternVariable | AutoAlloc | AutoAssign | AutoBinaryOperation
+Operation = FunctionCall | ExternVariable | AutoAlloc | AutoAssign | AutoBinaryOperation
 
 
 # lexer for parsing
@@ -137,12 +138,14 @@ class Lexer():
 
 # TODO: make these local to the parser, and return them to the actual compiler instead of globals
 # TODO: one way to make *multiple* functions is to use lists of lists.
-operations: list[Operations] = []
+operations: list[Operation] = []
 variables: list[Variable] = []
+# operations: list[list[Operation]] = [[]]
+# variables: list[list[Variable]] = [[]]
 
 
-def variable_exists(name: str) -> Variable | None:
-    for var in variables:
+def variable_exists(name: str, scope: list[Variable]) -> Variable | None:
+    for var in scope:
         if var.name == name:
             return var
     return None
@@ -181,6 +184,8 @@ def advance(p: Lexer) -> Lexer:
 
 
 def shift(p: Lexer, n: int) -> Lexer:
+    if p.l < 0:
+        raise ValueError("cannot have negative indices in the lexer pointer")
     return Lexer(p.l + n, p.r + n)
 
 
@@ -194,8 +199,8 @@ def shift_to_end_of_expression(s: str, p: Lexer) -> Lexer:
     return shift(Lexer(p.r, p.r), 0)
 
 
-def parse_function_argument(s: str, p: Lexer, level: int = 0) -> ArgumentType | None:
-    indent = " " * (level +2)
+def parse_function_argument(s: str, p: Lexer, scope: list[Variable]) -> ArgumentType | None:
+    indent = "    "
     assert s[p.l] == "("
     while True:
         if DEBUG: print(f"[l, r] = [{p.l:d}, {p.r:d}]   ->   '{s[p.l:p.r]:s}'")
@@ -219,7 +224,7 @@ def parse_function_argument(s: str, p: Lexer, level: int = 0) -> ArgumentType | 
                         value = int(token)
                     except ValueError:
                         # expression or variable
-                        if existing_var := variable_exists(token):
+                        if existing_var := variable_exists(token, scope):
                             return AutoVariable(index=existing_var.index)
                         else:
                             raise ValueError(f"Variable '{token:s}' is not defined")
@@ -227,8 +232,8 @@ def parse_function_argument(s: str, p: Lexer, level: int = 0) -> ArgumentType | 
                         return Literal(value=value)
 
 
-def parse_variable(s: str, p: Lexer, level: int = 0) -> str:
-    indent = " " * (level +2)
+def parse_variable(s: str, p: Lexer) -> str:
+    indent = "    "
     while True:
         p = advance(p)
         if DEBUG: print(f"  {indent:s}[l, r] = [{p.l:d}, {p.r:d}]   ->   '{s[p.l:p.r]:s}' [[len = {len(s[p.l:p.r]):d}]]")
@@ -252,7 +257,7 @@ def parse_variable(s: str, p: Lexer, level: int = 0) -> str:
             return p, token
 
 
-def parse_expression(s: str):
+def parse_expression(s: str, scope: list[Variable]):
     p = Lexer(l = 0, r = 1)
     while p.r != len(s):
         # we scan for either an operator (+, -, etc.)
@@ -264,8 +269,8 @@ def parse_expression(s: str):
 
         if s[p.r] == "+":
             # we have found the + operator, now we must parse the lhs and the rhs
-            lhs = parse_expression(s[p.l:p.r].strip())
-            rhs = parse_expression(s[p.r+1:].strip())
+            lhs = parse_expression(s[p.l:p.r].strip(), scope)
+            rhs = parse_expression(s[p.r+1:].strip(), scope)
             # we basically return the statement as is and we attempt in no way
             # to optimize out operations. For example, we could simplify the
             # additions of two Literals into a single literal.
@@ -276,7 +281,7 @@ def parse_expression(s: str):
         # we have parsed the expression but have not encountered weird stuff
         # so it must be a variable or a literal
         variable_name = s[p.l:p.r]
-        if existing_var := variable_exists(variable_name):
+        if existing_var := variable_exists(variable_name, scope):
             return AutoVariable(index=existing_var.index)
         else:
             return Literal(value=int(s[p.l:p.r]))
@@ -284,7 +289,7 @@ def parse_expression(s: str):
 
 
 
-def parse_operation(s: str, p: Lexer):
+def parse_operation(s: str, p: Lexer, scope: list[Variable]):
     indent = "      parse_operation :: "
     while True:
         if DEBUG: print(f"{indent:s}[l, r] = [{p.l:d}, {p.r:d}]   ->   '{s[p.l:p.r]:s}'")
@@ -296,6 +301,7 @@ def parse_operation(s: str, p: Lexer):
             # end of expression - for now, we just die rather gracefully
             raise ValueError(f"got either newline (\\n) or end of expression (;) while parsing.")
 
+        # Assignment
         if s[p.l] == "=":
             # lets find the end of the expression (i.e., locate the ";")
             p = shift(p, 1)
@@ -311,12 +317,12 @@ def parse_operation(s: str, p: Lexer):
                 # but we require that this variable exists already.
                 # we first look for whether that variable exists and just assign it
                 variable_name = token.strip()
-                if existing_var := variable_exists(variable_name):
+                if existing_var := variable_exists(variable_name, scope):
                     return AutoAssign, AutoVariable(index=existing_var.index)
                 else:
                     # if it is *not* a variable it is an expression (and thus more complicated)
                     # position = index_to_file_position(variable_name, s)
-                    operation = parse_expression(token.strip())
+                    operation = parse_expression(token.strip(), scope)
                     return AutoAssign, operation
                     # print(operation)
                     # exit_with_error(f"Cannot assign expression '{token.strip()}' to variable {variable_name}. Only literals or variables are implemented now.")
@@ -328,43 +334,65 @@ def parse_operation(s: str, p: Lexer):
 
 def parse(s: str, p: Lexer, level: int = 0):
     indent = " " * (level +2)
+    index = 0
+    scope_operations: list[Operation] = []
+    scope_variables: list[Variables] = []
     while True:
         if DEBUG: print(f"[l, r] = [{p.l:d}, {p.r:d}]   ->   '{s[p.l:p.r]:s}'")
 
-        if s[p.l] == "}":
+        if p.l > len(s) -1:
             return
 
-        if s[p.l] in [")", " ", "{"]:
+        if s[p.l] in ["{"]:
+            p = shift(p, 1)
+
+        if s[p.l] in ["}"]:
+            operations.append(scope_operations[:])
+            variables.append(scope_variables[:])
+            scope_operations.clear()
+            scope_variables.clear()
+            p = shift(p, 1)
+
+        if s[p.l] in [")", " "]:
             p = shift(p, 1)
             continue
 
         if s[p.r] in ["\n", ";"]:
-            p = shift(p, 2)
+            p = shift(p, 1)
             continue
 
         p = advance(p)
+
+        # exit if we are at the end of the code
+        if p.r == len(s) -1:
+            break
 
         # parse functions
         if s[p.r] == "(":
             function_name = s[p.l:p.r]
             if DEBUG: print(f"  {indent:s}function :: NAME at [l, r] = [{p.l:d}, {p.r:d}] content = '{function_name:s}'")
+            p_end = shift_to_end_of_expression(s, p)
+
+            # find matching end parenthesis from the back
+            while s[p_end.r] != ")":
+                p_end = shift(p_end, -1)
 
             # we reset the lexer p to the right hand pointer
             # so we can parse any function arguments
             p.l = p.r
-            arguments = parse_function_argument(s, p, level +2)
+            arguments = parse_function_argument(s, p, scope_variables)
             match arguments:
                 case None:
-                    operations.append(FunctionCall(name=function_name, args=arguments))
+                    scope_operations.append(FunctionCall(name=function_name, args=arguments))
                 case Literal(value):
-                    operations.append(FunctionCall(name=function_name, args=arguments))
+                    scope_operations.append(FunctionCall(name=function_name, args=arguments))
                 case AutoVariable(index):
-                    operations.append(FunctionCall(name=function_name, args=arguments))
+                    scope_operations.append(FunctionCall(name=function_name, args=arguments))
                 case _:
                     raise ValueError(f"could not parse argument")
 
             # we shift to the end of the parsing of the argument
-            p = shift_to_end_of_expression(s, p)
+            p = shift(p_end, 1)
             continue
 
         if s[p.r] == " " or s[p.r] == ";":
@@ -378,26 +406,26 @@ def parse(s: str, p: Lexer, level: int = 0):
                 p.l = p.r
                 if token == "extrn":
                     p = shift(p, 1)
-                    _, variable_name = parse_variable(s, p, level +2)
-                    if existing_var := variable_exists(variable_name):
+                    _, variable_name = parse_variable(s, p)
+                    if existing_var := variable_exists(variable_name, scope_variables):
                         error_variable_already_defined(variable_name, p.r+1, existing_var.where, s)
 
-                    operations.append(ExternVariable(name=variable_name))
-                    variables.append(Variable(name=variable_name, index=-1, where=p.r+1, storage=Storage.EXTERNAL))
+                    scope_operations.append(ExternVariable(name=variable_name))
+                    scope_variables.append(Variable(name=variable_name, index=-1, where=p.r+1, storage=Storage.EXTERNAL))
 
                 if token == "auto":
                     while s[p.r] != ";":
                         p = shift(p, 1)
-                        p_variable, variable_name = parse_variable(s, p, level +2)
+                        p_variable, variable_name = parse_variable(s, p)
                         if variable_name is None:
                             break
 
-                        if existing_var := variable_exists(variable_name):
+                        if existing_var := variable_exists(variable_name, scope_variables):
                             error_variable_already_defined(variable_name, p.r+1, existing_var.where, s)
 
-                        operations.append(AutoAlloc(usize=1))
-                        n_existing_auto = len([v for v in variables if v.storage == Storage.AUTO])
-                        variables.append(Variable(name=variable_name, index=n_existing_auto, where=p.r+1, storage=Storage.AUTO))
+                        scope_operations.append(AutoAlloc(usize=1))
+                        n_existing_auto = len([v for v in scope_variables if v.storage == Storage.AUTO])
+                        scope_variables.append(Variable(name=variable_name, index=n_existing_auto, where=p.r+1, storage=Storage.AUTO))
                         #p = shift(p, len(variable_name))
                         #p = shift(p_variable, 1)
                         p = shift(Lexer(l = p_variable.r, r = p_variable.r), 0)
@@ -411,23 +439,25 @@ def parse(s: str, p: Lexer, level: int = 0):
                 if DEBUG: print(f"  {indent:s}token :: NAME at [l, r] = [{p.l:d}, {p.r:d}] content = '{token:s}'")
 
                 # we check for existing variable with the same name
-                if variable := variable_exists(token):
+                if variable := variable_exists(token, scope_variables):
                     if variable.storage == Storage.EXTERNAL:
                         exit_with_error(f"Cannot assign value to variable '{variable.name:s}' because it is declared EXTERNAL.")
 
                     elif variable.storage == Storage.AUTO:
                         p.l = p.r-1
                         # here we scan for assignment first I suppose? or do we scan for some operation?
-                        op, *args = parse_operation(s, shift(p,1))
+                        # we get an operation back (op) and a list of arguments (args)
+                        op: Operation
+                        op, *args = parse_operation(s, shift(p,1), scope_variables)
                         if len(args) == 1:
                             rhs = args[0]
                             if isinstance(rhs, Literal):
-                                operations.append(AutoAssign(index=variable.index, value = rhs))
+                                scope_operations.append(op(index=variable.index, value = rhs))
                             elif isinstance(rhs, AutoVariable):
-                                operations.append(AutoAssign(index=variable.index, value = rhs))
+                                scope_operations.append(op(index=variable.index, value = rhs))
                             # temporary?
                             elif isinstance(rhs, AutoBinaryOperation):
-                                operations.append(AutoAssign(index=variable.index, value=rhs))
+                                scope_operations.append(op(index=variable.index, value=rhs))
                             # temporary end?
                             else:
                                 raise NotImplementedError("Not implemented yet." + str(type(rhs)))
@@ -436,7 +466,7 @@ def parse(s: str, p: Lexer, level: int = 0):
                             rhs = args[1]
                             #raise NotImplementedError(f"two arguments not supported")
                             # TODO add new storage
-                            operations.append(AutoBinaryOperation(op, index=-1, lhs=lhs, rhs=rhs))
+                            scope_operations.append(AutoBinaryOperation(op, index=-1, lhs=lhs, rhs=rhs))
                         else:
                             raise NotImplementedError(f"Compiler ERROR: number of arguments returned from parse_operation was {len(args):d} which is not supported.")
                             # more arguments
@@ -448,28 +478,21 @@ def parse(s: str, p: Lexer, level: int = 0):
                    position = index_to_file_position(p.l, s)
                    exit_with_error(f"Variable '{token:s}' at line {position.line:d} column {position.column:d} is not declared.")
 
-        # exit if we are at the end of the code
-        if p.r == len(s) -1:
-            break
 
+def compile_function(_operations: list[Operation], _variables: list[Variable]):
+    first_func = _operations.pop(0)
+    s = ""
 
-def compile_source():
-    """ Compiles the source into python3 compatible code """
-    s = "#!/usr/bin/env python3\n"
-
-    # first argument in operations is the calling function
-    # TODO: for multiple functions this needs to change
-    #       som we should most likely go for finding "main" instead
-    first_func = operations.pop(0)
-    s += "def {0:s}():\n".format(first_func.name)
+    if first_func.name != "main":
+        s += "def {0:s}():\n".format(first_func.name)
 
     # we start by defining variables
     s += "    variables = []\n"
-    for variable in variables:
+    for variable in _variables:
         if variable.storage == Storage.EXTERNAL:
             continue
 
-    for op in operations:
+    for op in _operations:
         if isinstance(op, FunctionCall):
             if op.args is None:
                 s += "    {0:s}()\n".format(op.name)
@@ -518,10 +541,30 @@ def compile_source():
         else:
             raise ValueError(f"Operation '{str(type(op)):s}' not supported")
 
-    # make_epilog()
+    return s
+
+
+def compile_source():
+    """ Compiles the source into python3 compatible code """
+    s = "#!/usr/bin/env python3\n"
+
+    # we first find the main entrypoint to the program and pop that
+    # so we can write that to the epilog
+    index = 0
+    for i, op in enumerate(operations):
+        if op[0].name == "main":
+            index = i
+
+    main_operations = operations.pop(index)
+    main_variables = variables.pop(index)
+
+    for op, var in zip(operations, variables):
+       s += compile_function(op, var)
+
     # the epilog in python is the magic that makes it run
     s += "if __name__ == \"__main__\":\n"
-    s += "    {0:s}()\n".format(first_func.name)
+    s += compile_function(main_operations, main_variables)
+
     return s
 
 if __name__ == "__main__":
