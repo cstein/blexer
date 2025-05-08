@@ -126,7 +126,7 @@ class AutoBinaryOperation:
     rhs: ArgumentType
 
 
-Operation = FunctionCall | ExternVariable | AutoAlloc | AutoAssign | AutoBinaryOperation
+OperationType = FunctionCall | ExternVariable | AutoAlloc | AutoAssign | AutoBinaryOperation
 
 
 # lexer for parsing
@@ -447,7 +447,7 @@ def parse(s: str, p: Lexer, level: int = 0):
                         p.l = p.r-1
                         # here we scan for assignment first I suppose? or do we scan for some operation?
                         # we get an operation back (op) and a list of arguments (args)
-                        op: Operation
+                        op: OperationType
                         op, *args = parse_operation(s, shift(p,1), scope_variables)
                         if len(args) == 1:
                             rhs = args[0]
