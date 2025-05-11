@@ -23,8 +23,10 @@ def exit_with_error(error: str) -> None:
 def is_keyword(keyword: str) -> bool:
     return keyword in B_KEYWORDS
 
+
 def is_special_char(char: str) -> bool:
     return char in B_SPECIAL_CHARS
+
 
 def is_valid_token(token: str) -> bool:
     if is_keyword(token):
@@ -106,9 +108,11 @@ class AutoAssign:
 class Operation(Enum):
     """ Specifies the type of operation
 
-        :cvar PLUS: An addition
+        :cvar PLUS: An addition of two numbers (a + b)
+        :svar LESS: A test if a condition is met (a < b)
     """
     PLUS: int = 1
+    LESS: int = 2
 
 @dataclass
 class AutoBinaryOperation:
@@ -275,6 +279,15 @@ def parse_expression(s: str, scope: list[Variable]):
             # to optimize out operations. For example, we could simplify the
             # additions of two Literals into a single literal.
             return AutoBinaryOperation(op=Operation.PLUS, index=-1, lhs=lhs, rhs=rhs)
+
+        if s[p.r] == "<":
+            # we have found the < operator, now we must parse the lhs and the rhs
+            lhs = parse_expression(s[p.l:p.r].strip(), scope)
+            rhs = parse_expression(s[p.r+1:].strip(), scope)
+            # we basically return the statement as is and we attempt in no way
+            # to optimize out operations. For example, we could simplify the
+            # additions of two Literals into a single literal.
+            return AutoBinaryOperation(op=Operation.LESS, index=-1, lhs=lhs, rhs=rhs)
         p = advance(p)
 
     else:
@@ -430,8 +443,6 @@ def parse(s: str, p: Lexer, level: int = 0):
                         #p = shift(p_variable, 1)
                         p = shift(Lexer(l = p_variable.r, r = p_variable.r), 0)
 
-                # we shift to after the keyword
-                #p = shift(Lexer(p.r, p.r), len(variable_name)+2)
                 p = shift_to_end_of_expression(s, p)
 
             else:
@@ -526,6 +537,8 @@ def compile_function(_operations: list[Operation], _variables: list[Variable]):
                     match operator:
                         case Operation.PLUS:
                             s += " + "
+                        case Operation.LESS:
+                            s += " < "
                         case _:
                             raise ValueError("Operator not understood")
                     match rhs:
