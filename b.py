@@ -161,7 +161,6 @@ OperationType = (
 )
 
 
-# lexer for parsing
 @dataclass
 class Lexer():
     l: int = 0
@@ -504,8 +503,7 @@ def parse(s: str, p: Lexer, operations: list, variables: list, level: int = 0):
 
                     elif variable.storage == Storage.AUTO:
                         p.l = p.r-1
-                        # here we scan for assignment first I suppose? or do we scan for some operation?
-                        # we get an operation back (op) and a list of arguments (args)
+
                         op: OperationType
                         op, *args = parse_operation(s, shift(p,1), scope_variables + variables)
                         if len(args) == 1:
@@ -514,21 +512,16 @@ def parse(s: str, p: Lexer, operations: list, variables: list, level: int = 0):
                                 scope_operations.append(op(index=variable.index, value = rhs))
                             elif isinstance(rhs, AutoVariable):
                                 scope_operations.append(op(index=variable.index, value = rhs))
-                            # temporary?
                             elif isinstance(rhs, AutoBinaryOperation):
                                 scope_operations.append(op(index=variable.index, value=rhs))
-                            # temporary end?
                             else:
                                 raise NotImplementedError("Not implemented yet." + str(type(rhs)))
                         elif len(args) == 2:
                             lhs = args[0]
                             rhs = args[1]
-                            #raise NotImplementedError(f"two arguments not supported")
-                            # TODO add new storage
                             scope_operations.append(AutoBinaryOperation(op, index=-1, lhs=lhs, rhs=rhs))
                         else:
                             raise NotImplementedError(f"Compiler ERROR: number of arguments returned from parse_operation was {len(args):d} which is not supported.")
-                            # more arguments
                         p = shift_to_end_of_expression(s, p)
                     else:
                         exit_with_error(f"Variable '{variable.name:s}' has unspecified storage.")
@@ -675,36 +668,42 @@ Compiler for the b programming language.
 Currently compiles it into python.
 Provides a minimal standard library.
     """)
-    ap.add_argument("input", help=".b source file to compile")
-    ap.add_argument("-o", dest="output", default=None, help="output file of compilation. if not given will print program to screen.")
-    ap.add_argument("-v", dest="verbose", default=False, action="store_true", help="print verbose output")
-    ap.add_argument("--debug", dest="debug", action="store_true", default=False, help="set flag to enable debug output")
+    ap.add_argument("input", help=".b source file to compile.")
+    ap.add_argument("-o", dest="output", default=None, help="Output of compilation. Uses same name as .b file if not given here.")
+    ap.add_argument("-v", dest="verbose", default=False, action="store_true", help="Enable verbose output.")
+    ap.add_argument("--debug", dest="debug", action="store_true", default=False, help="Enable debug output.")
     args = ap.parse_args()
     DEBUG = args.debug
     VERBOSE = args.verbose
-    filename = args.input
-
-    operations: list[Operation] = []
-    variables: list[Variable] = []
+    input_filename = args.input
+    output_filename = args.output
+    if output_filename is None:
+        output_filename, _ = os.path.splitext(os.path.basename(input_filename))
 
     s = ""
-    with open(filename, "r") as f:
+    with open(input_filename, "r") as f:
         for line in f:
             s += line
 
     verbose_info("---- input program ----")
     verbose_info(s)
+
+    # get ready for parsing source
     p = Lexer(l=0, r=0)
+    operations: list[Operation] = []
+    variables: list[Variable] = []
     operations, variables = parse(s, p, operations, variables)
+
     debug_info("\n---- functions ----\n")
     debug_info(operations)
     debug_info("\n---- variables ----\n")
     debug_info(variables)
-    debug_info("\n--- compiled source ---\n")
+
+    # compile the source
     output = compile_source(operations)
+    verbose_info("\n--- compiled source ---\n")
     verbose_info(output)
-    if args.output is not None:
-        with open(args.output, "w") as f:
-            f.write(output)
-        os.chmod(args.output, 0o744)
-        verbose_info(f"compiled to '{args.output}'")
+
+    with open(output_filename, "w") as f:
+        f.write(output)
+    os.chmod(output_filename, 0o744)
