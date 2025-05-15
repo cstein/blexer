@@ -5,10 +5,9 @@ from enum import Enum
 import os
 import sys
 
-
 DEBUG = False
-B_KEYWORDS = ["extrn", "auto"]
-B_SPECIAL_CHARS = [","]
+VERBOSE = False
+B_KEYWORDS = ["extrn", "auto", "while"]
 
 
 def exit_with_error(error: str) -> None:
@@ -20,20 +19,22 @@ def exit_with_error(error: str) -> None:
     sys.exit(1)
 
 
+def unreachable() -> None:
+    raise RuntimeError("Unreachable code detected. This is a bug.")
+
+
+def debug_info(message: str) -> None:
+    if DEBUG:
+        print(message)
+
+
+def verbose_info(message: str) -> None:
+    if VERBOSE:
+        print(message)
+
+
 def is_keyword(keyword: str) -> bool:
     return keyword in B_KEYWORDS
-
-
-def is_special_char(char: str) -> bool:
-    return char in B_SPECIAL_CHARS
-
-
-def is_valid_token(token: str) -> bool:
-    if is_keyword(token):
-        raise ValueError(f"'{token:s}' is a keyword and cannot be a variable name.")
-    if is_special_char(token):
-        raise ValueError(f"'{token:s}' is a special character and cannot be a variable name.")
-    return is_keyword(token) and is_special_char(token)
 
 
 class Storage(Enum):
@@ -61,7 +62,7 @@ class Argument:
 
 @dataclass
 class AutoVariable(Argument):
-    """ A variable which we are responsible for memory
+    """ A variable for which we are responsible for memory
         :cvar index: a pointer to where the variable is stored in memory
     """
     index: int
@@ -69,7 +70,7 @@ class AutoVariable(Argument):
 
 @dataclass
 class Literal(Argument):
-    """ A literal value - a number. can be considered constant for the runtime of the program
+    """ A literal value, i.e. a number. Can be considered constant for the runtime of the program
         :cvar value: the value of store
     """
     value: int
@@ -96,11 +97,20 @@ class ExternVariable:
 
 @dataclass
 class AutoAlloc:
+    """ Requests memory to be allocated for usize variables
+
+        :cvar usize: the number of items we need memory for
+    """
     usize: int
 
 
 @dataclass
 class AutoAssign:
+    """ A variable that is assigned a value
+
+        :cvar index: the index of the memory we are storing
+        :cvar value: the value we are storing into memory
+    """
     index: int
     value: ArgumentType
 
@@ -113,6 +123,7 @@ class Operation(Enum):
     """
     PLUS: int = 1
     LESS: int = 2
+
 
 @dataclass
 class AutoBinaryOperation:
@@ -129,8 +140,25 @@ class AutoBinaryOperation:
     lhs: ArgumentType
     rhs: ArgumentType
 
+@dataclass
+class ConditionalJump:
+    condition: ArgumentType
 
-OperationType = FunctionCall | ExternVariable | AutoAlloc | AutoAssign | AutoBinaryOperation
+
+@dataclass
+class Jump:
+    pass
+
+
+OperationType = (
+    FunctionCall
+    | ExternVariable
+    | AutoAlloc
+    | AutoAssign
+    | AutoBinaryOperation
+    | ConditionalJump
+    | Jump
+)
 
 
 # lexer for parsing
@@ -138,14 +166,6 @@ OperationType = FunctionCall | ExternVariable | AutoAlloc | AutoAssign | AutoBin
 class Lexer():
     l: int = 0
     r: int = 0
-
-
-# TODO: make these local to the parser, and return them to the actual compiler instead of globals
-# TODO: one way to make *multiple* functions is to use lists of lists.
-operations: list[Operation] = []
-variables: list[Variable] = []
-# operations: list[list[Operation]] = [[]]
-# variables: list[list[Variable]] = [[]]
 
 
 def variable_exists(name: str, scope: list[Variable]) -> Variable | None:
@@ -202,63 +222,10 @@ def shift_to_end_of_expression(s: str, p: Lexer) -> Lexer:
         p = advance(p)
     return shift(Lexer(p.r, p.r), 0)
 
-
-def parse_function_argument(s: str, p: Lexer, scope: list[Variable]) -> ArgumentType | None:
-    indent = "    "
-    assert s[p.l] == "("
-    while True:
-        if DEBUG: print(f"[l, r] = [{p.l:d}, {p.r:d}]   ->   '{s[p.l:p.r]:s}'")
-
-        if s[p.l] == "}":
-            raise ValueError("did not expect end of function.")
-
+def shift_to_end_of_block(s: str, p: Lexer) -> Lexer:
+    while s[p.r] not in ["}"]:
         p = advance(p)
-
-        if s[p.r] == ")":
-            if s[p.l] == "(":
-                token = s[p.l+1:p.r]
-                if DEBUG: print(f"  {indent:s}function :: ARGUMENT = at [l, r] = [{p.l:d}, {p.r:d}] content = '{token:s}'")
-
-                if p.r - p.l == 1:
-                    return None
-                else:
-                    # check if it is either a literal
-                    token = s[p.l+1:p.r]
-                    try:
-                        value = int(token)
-                    except ValueError:
-                        # expression or variable
-                        if existing_var := variable_exists(token, scope):
-                            return AutoVariable(index=existing_var.index)
-                        else:
-                            raise ValueError(f"Variable '{token:s}' is not defined")
-                    else:
-                        return Literal(value=value)
-
-
-def parse_variable(s: str, p: Lexer) -> str:
-    indent = "    "
-    while True:
-        p = advance(p)
-        if DEBUG: print(f"  {indent:s}[l, r] = [{p.l:d}, {p.r:d}]   ->   '{s[p.l:p.r]:s}' [[len = {len(s[p.l:p.r]):d}]]")
-        if "}" in s[p.l:p.r]:
-            raise ValueError("Parsing of source failed.")
-
-        if ";" in s[p.l:p.r]:
-            token = s[p.l:p.r-1]
-            if DEBUG: print(f"  {indent:s}variable :: NAME = at [l, r] = [{p.l:d}, {p.r:d}] content = '{token:s}'")
-            return Lexer(l = p.l, r = p.r-1), token
-
-        if s[p.l:p.r] == ",":
-            p = shift(p,1)
-
-        if s[p.l:p.r] == " ":
-            p = shift(p,1)
-
-        if s[p.r] == ",":
-            token = s[p.l:p.r]
-            if DEBUG: print(f"  {indent:s}variable :: NAME = at [l, r] = [{p.l:d}, {p.r:d}] content = '{token:s}'")
-            return p, token
+    return shift(Lexer(p.r, p.r), 0)
 
 
 def parse_expression(s: str, scope: list[Variable]):
@@ -272,7 +239,6 @@ def parse_expression(s: str, scope: list[Variable]):
                 exit_with_error(f"Could not find matching parenthesis in expression '{s:s}'")
 
         if s[p.r] == "+":
-            # we have found the + operator, now we must parse the lhs and the rhs
             lhs = parse_expression(s[p.l:p.r].strip(), scope)
             rhs = parse_expression(s[p.r+1:].strip(), scope)
             # we basically return the statement as is and we attempt in no way
@@ -281,13 +247,13 @@ def parse_expression(s: str, scope: list[Variable]):
             return AutoBinaryOperation(op=Operation.PLUS, index=-1, lhs=lhs, rhs=rhs)
 
         if s[p.r] == "<":
-            # we have found the < operator, now we must parse the lhs and the rhs
             lhs = parse_expression(s[p.l:p.r].strip(), scope)
             rhs = parse_expression(s[p.r+1:].strip(), scope)
             # we basically return the statement as is and we attempt in no way
             # to optimize out operations. For example, we could simplify the
             # additions of two Literals into a single literal.
             return AutoBinaryOperation(op=Operation.LESS, index=-1, lhs=lhs, rhs=rhs)
+
         p = advance(p)
 
     else:
@@ -298,21 +264,66 @@ def parse_expression(s: str, scope: list[Variable]):
             return AutoVariable(index=existing_var.index)
         else:
             return Literal(value=int(s[p.l:p.r]))
-        exit_with_error(f"Could not parse expression '{s:s}'")
+        unreachable()
 
+
+def get_next_token(s: str, p: Lexer) -> str:
+    indent = "    get_next_token::"
+    while True:
+        p = advance(p)
+        debug_info(f"  {indent:s}[l, r] = [{p.l:d}, {p.r:d}]   ->   '{s[p.l:p.r]:s}' [[len = {len(s[p.l:p.r]):d}]]")
+        if "}" in s[p.l:p.r]:
+            raise RuntimeError("Parsing of source failed.")
+
+        if ";" in s[p.l:p.r]:
+            token = s[p.l:p.r-1]
+            debug_info(f"  {indent:s}variable :: NAME = at [l, r] = [{p.l:d}, {p.r:d}] content = '{token:s}'")
+            return Lexer(l = p.l, r = p.r-1), token
+
+        if s[p.l:p.r] == ",":
+            p = shift(p,1)
+
+        if s[p.l:p.r] == " ":
+            p = shift(p,1)
+
+        if s[p.r] == "\n":
+            position = index_to_file_position(p.r-1, s)
+            exit_with_error(f"Unexpected end of line at line {position.line:d} column {position.column:d}. Expected ';' but got '\\n'.")
+
+        if s[p.r] == ",":
+            token = s[p.l:p.r]
+            debug_info(f"  {indent:s}variable :: NAME = at [l, r] = [{p.l:d}, {p.r:d}] content = '{token:s}'")
+            return p, token
+
+
+def parse_function_arguments(s: str, scope: list[Variable]) -> list[ArgumentType | None]:
+    """ Parses arguments to functions
+
+        :param s: the argument(s) to parse
+        :param scope: the current scope of variables already in use
+    """
+    if len(s) == 0:
+        return [None]
+
+    if "," not in s:
+        return [parse_expression(s, scope)]
+    else:
+        return [parse_expression(item.strip(), scope) for item in s.split(",")]
+    unreachable()
 
 
 def parse_operation(s: str, p: Lexer, scope: list[Variable]):
     indent = "      parse_operation :: "
     while True:
-        if DEBUG: print(f"{indent:s}[l, r] = [{p.l:d}, {p.r:d}]   ->   '{s[p.l:p.r]:s}'")
+        debug_info(f"{indent:s}[l, r] = [{p.l:d}, {p.r:d}]   ->   '{s[p.l:p.r]:s}'")
         if s[p.l] in [")", " ", "{"]:
             p = shift(p, 1)
             continue
 
         if s[p.r] in ["\n", ";"]:
             # end of expression - for now, we just die rather gracefully
-            raise ValueError(f"got either newline (\\n) or end of expression (;) while parsing.")
+            fp = index_to_file_position(p, s)
+            exit_with_error(f"got unexpected character (\\n or ;) on line {fp.line:d}")
 
         # Assignment
         if s[p.l] == "=":
@@ -337,36 +348,37 @@ def parse_operation(s: str, p: Lexer, scope: list[Variable]):
                     # position = index_to_file_position(variable_name, s)
                     operation = parse_expression(token.strip(), scope)
                     return AutoAssign, operation
-                    # print(operation)
-                    # exit_with_error(f"Cannot assign expression '{token.strip()}' to variable {variable_name}. Only literals or variables are implemented now.")
             else:
                 # we have a literal
                 return AutoAssign, Literal(value=value)
-            return None
+
+    unreachable()
 
 
-def parse(s: str, p: Lexer, level: int = 0):
-    indent = " " * (level +2)
-    index = 0
+def parse(s: str, p: Lexer, operations: list, variables: list, level: int = 0):
+    indent = "   " * (level +2)
     scope_operations: list[Operation] = []
-    scope_variables: list[Variables] = []
+    scope_variables: list[Variable] = []
     while True:
-        if DEBUG: print(f"[l, r] = [{p.l:d}, {p.r:d}]   ->   '{s[p.l:p.r]:s}'")
 
         if p.l > len(s) -1:
-            return
+            return operations, variables
+
+        debug_info(f"{indent:s} [l, r] = [{p.l:d}, {p.r:d}]   ->   '{s[p.l:p.r]:s}'")
 
         if s[p.l] in ["{"]:
             p = shift(p, 1)
 
         if s[p.l] in ["}"]:
-            operations.append(scope_operations[:])
+            if scope_operations:
+                operations.append(scope_operations[:])
             variables.append(scope_variables[:])
             scope_operations.clear()
             scope_variables.clear()
             p = shift(p, 1)
+            continue
 
-        if s[p.l] in [")", " "]:
+        if s[p.l] in [")", " ", "\n"]:
             p = shift(p, 1)
             continue
 
@@ -383,7 +395,12 @@ def parse(s: str, p: Lexer, level: int = 0):
         # parse functions
         if s[p.r] == "(":
             function_name = s[p.l:p.r]
-            if DEBUG: print(f"  {indent:s}function :: NAME at [l, r] = [{p.l:d}, {p.r:d}] content = '{function_name:s}'")
+            if is_keyword(function_name):
+
+                fp = index_to_file_position(p.l, s)
+                exit_with_error(f"Function name '{function_name:s}' at line {fp.line:d} column {fp.column:d} is a reserved keyword. Did you forget to put space ' ' between while and ()?")
+
+            debug_info(f"  {indent:s}function :: NAME at [l, r] = [{p.l:d}, {p.r:d}] content = '{function_name:s}'")
             p_end = shift_to_end_of_expression(s, p)
 
             # find matching end parenthesis from the back
@@ -393,16 +410,30 @@ def parse(s: str, p: Lexer, level: int = 0):
             # we reset the lexer p to the right hand pointer
             # so we can parse any function arguments
             p.l = p.r
-            arguments = parse_function_argument(s, p, scope_variables)
-            match arguments:
-                case None:
-                    scope_operations.append(FunctionCall(name=function_name, args=arguments))
-                case Literal(value):
-                    scope_operations.append(FunctionCall(name=function_name, args=arguments))
-                case AutoVariable(index):
-                    scope_operations.append(FunctionCall(name=function_name, args=arguments))
-                case _:
-                    raise ValueError(f"could not parse argument")
+            arguments = parse_function_arguments(s[p.r+1:p_end.r], scope_variables + variables)
+            #scope_operations.append(FunctionCall(name=function_name, args=arguments))
+            args = []
+            for argument in arguments:
+                match argument:
+                    case None:
+                        args.append(argument)
+                    case Literal(_):
+                        args.append(argument)
+                    case AutoVariable(_):
+                        args.append(argument)
+                    case AutoBinaryOperation(_, _, lhs, rhs):
+                        # for function arguments, we cannot have expressions but only variables
+                        # (at least if we ever want to support assembler)
+                        # so if index is -1 we define a new variable and store the results in
+                        # this variable **before** we call the function with that variable as an argument
+                        scope_operations.append(AutoAlloc(usize=1))
+                        n_existing_auto = len([v for v in scope_variables if v.storage == Storage.AUTO])
+                        scope_variables.append(Variable(name="None", index=n_existing_auto, where=p.r+1, storage=Storage.AUTO))
+                        scope_operations.append(AutoAssign(index=n_existing_auto, value=argument))
+                        args.append(AutoVariable(index=n_existing_auto))
+                    case _:
+                        raise ValueError(f"could not parse argument of type {str(type(arguments)):s}")
+            scope_operations.append(FunctionCall(name=function_name, args=args))
 
             # we shift to the end of the parsing of the argument
             p = shift(p_end, 1)
@@ -415,11 +446,11 @@ def parse(s: str, p: Lexer, level: int = 0):
                 continue
 
             if is_keyword(token):
-                if DEBUG: print(f"  {indent:s}keyword :: NAME at [l, r] = [{p.l:d}, {p.r:d}] content = '{token:s}'")
+                debug_info(f"  {indent:s}keyword :: NAME at [l, r] = [{p.l:d}, {p.r:d}] content = '{token:s}'")
                 p.l = p.r
                 if token == "extrn":
                     p = shift(p, 1)
-                    _, variable_name = parse_variable(s, p)
+                    _ , variable_name = get_next_token(s, p)
                     if existing_var := variable_exists(variable_name, scope_variables):
                         error_variable_already_defined(variable_name, p.r+1, existing_var.where, s)
 
@@ -429,7 +460,7 @@ def parse(s: str, p: Lexer, level: int = 0):
                 if token == "auto":
                     while s[p.r] != ";":
                         p = shift(p, 1)
-                        p_variable, variable_name = parse_variable(s, p)
+                        p_variable, variable_name = get_next_token(s, p)
                         if variable_name is None:
                             break
 
@@ -439,18 +470,35 @@ def parse(s: str, p: Lexer, level: int = 0):
                         scope_operations.append(AutoAlloc(usize=1))
                         n_existing_auto = len([v for v in scope_variables if v.storage == Storage.AUTO])
                         scope_variables.append(Variable(name=variable_name, index=n_existing_auto, where=p.r+1, storage=Storage.AUTO))
-                        #p = shift(p, len(variable_name))
-                        #p = shift(p_variable, 1)
                         p = shift(Lexer(l = p_variable.r, r = p_variable.r), 0)
+
+                if token == "while":
+                    p = shift(p, 1)
+                    assert s[p.l] == "("
+                    while s[p.r] != ")":
+                        p = advance(p)
+                    else:
+                        # TODO: it works, but could use some cleanup
+                        p = advance(p)
+                        condition = parse_expression(s[p.l+1:p.r-1], scope_variables)
+                        debug_info(f"{indent:s} condition for while loop: '{s[p.l+1:p.r-1]:s}' -> {str(condition):s}")
+                        scope_operations.append(ConditionalJump(condition=condition))
+                        p = shift(Lexer(l = p.r, r = p.r), 1)
+                        assert s[p.l] == "{"
+                        p_end = shift(shift_to_end_of_block(s, p), 0)
+                        parse(s[p.l:p_end.r +1], Lexer(l = 0, r = 0), scope_operations, scope_variables, level=12)
+                        scope_operations.append(Jump())
+                        p = shift(shift_to_end_of_block(s, p), 0)
 
                 p = shift_to_end_of_expression(s, p)
 
             else:
                 # if it is *not* a keyword, it could be a variable assignment
-                if DEBUG: print(f"  {indent:s}token :: NAME at [l, r] = [{p.l:d}, {p.r:d}] content = '{token:s}'")
+                debug_info(f"  {indent:s}token :: NAME at [l, r] = [{p.l:d}, {p.r:d}] content = '{token:s}'")
 
                 # we check for existing variable with the same name
-                if variable := variable_exists(token, scope_variables):
+                # NOTE: we look both in the current (local) scope but also in the scope of the parent
+                if variable := variable_exists(token, scope_variables + variables):
                     if variable.storage == Storage.EXTERNAL:
                         exit_with_error(f"Cannot assign value to variable '{variable.name:s}' because it is declared EXTERNAL.")
 
@@ -459,7 +507,7 @@ def parse(s: str, p: Lexer, level: int = 0):
                         # here we scan for assignment first I suppose? or do we scan for some operation?
                         # we get an operation back (op) and a list of arguments (args)
                         op: OperationType
-                        op, *args = parse_operation(s, shift(p,1), scope_variables)
+                        op, *args = parse_operation(s, shift(p,1), scope_variables + variables)
                         if len(args) == 1:
                             rhs = args[0]
                             if isinstance(rhs, Literal):
@@ -489,75 +537,43 @@ def parse(s: str, p: Lexer, level: int = 0):
                    position = index_to_file_position(p.l, s)
                    exit_with_error(f"Variable '{token:s}' at line {position.line:d} column {position.column:d} is not declared.")
 
+    unreachable()
 
-def compile_function(_operations: list[Operation], _variables: list[Variable]):
-    first_func = _operations.pop(0)
+
+def compile_binop(operator: Operation, index: int, lhs: ArgumentType, rhs: ArgumentType) -> str:
+    """ Compiles a binary operator
+
+        :param operator: the operation (plus, minus, etc.) to perform
+        :param index: the index of memory storage
+        :param lhs: the left hand side of the operator
+        :param rhs: the right hand side of the operator
+    """
     s = ""
-
-    if first_func.name != "main":
-        s += "def {0:s}():\n".format(first_func.name)
-
-    # we start by defining variables
-    s += "    variables = []\n"
-    for variable in _variables:
-        if variable.storage == Storage.EXTERNAL:
-            continue
-
-    for op in _operations:
-        if isinstance(op, FunctionCall):
-            if op.args is None:
-                s += "    {0:s}()\n".format(op.name)
-            elif isinstance(op.args, Literal):
-                s += "    {0:s}({1:d})\n".format(op.name, op.args.value)
-            elif isinstance(op.args, AutoVariable):
-                s += "    {0:s}(variables[{1:d}])\n".format(op.name, op.args.index)
-            else:
-                raise ValueError("type not understood.")
-
-        elif isinstance(op, ExternVariable):
-            s += "    from extrn import {0:s}\n".format(op.name)
-        elif isinstance(op, AutoAlloc):
-            s += "    variables.append(0)\n"
-        elif isinstance(op, AutoAssign):
-            # looks funky, but it is assignment (op) that takes an argument
-            match op.value:
-                case Literal(value):
-                    s += "    variables[{0:d}] = {1:d}\n".format(op.index, op.value.value)
-                case AutoVariable(index):
-                    s += "    variables[{0:d}] = variables[{1:d}]\n".format(op.index, op.value.index)
-                case AutoBinaryOperation(operator, index, lhs, rhs):
-                    s += "    variables[{0:d}] = ".format(op.index)
-                    match lhs:
-                        case Literal(value):
-                            s += "{0:d}".format(lhs.value)
-                        case AutoVariable(index):
-                            s += "variables[{0:d}]".format(lhs.index)
-                        case _:
-                            raise ValueError("LHS could not be compiled.")
-                    match operator:
-                        case Operation.PLUS:
-                            s += " + "
-                        case Operation.LESS:
-                            s += " < "
-                        case _:
-                            raise ValueError("Operator not understood")
-                    match rhs:
-                        case Literal(value):
-                            s += "{0:d}".format(rhs.value)
-                        case AutoVariable(index):
-                            s += "variables[{0:d}]".format(rhs.index)
-                        case _:
-                            raise ValueError("LHS could not be compiled.")
-                    s += "\n"
-                case _:
-                    raise ValueError("Assignment of expressions are not supported." + op.value)
-        else:
-            raise ValueError(f"Operation '{str(type(op)):s}' not supported")
-
+    match lhs:
+        case Literal(value):
+            s += "{0:d}".format(lhs.value)
+        case AutoVariable(index):
+            s += "variables[{0:d}]".format(lhs.index)
+        case _:
+            raise ValueError("LHS could not be compiled.")
+    match operator:
+        case Operation.PLUS:
+            s += " + "
+        case Operation.LESS:
+            s += " < "
+        case _:
+            raise ValueError("Operator not understood")
+    match rhs:
+        case Literal(value):
+            s += "{0:d}".format(value)
+        case AutoVariable(index):
+            s += "variables[{0:d}]".format(index)
+        case _:
+            raise ValueError("LHS could not be compiled.")
     return s
 
 
-def compile_source():
+def compile_source(operations: list):
     """ Compiles the source into python3 compatible code """
     s = "#!/usr/bin/env python3\n"
 
@@ -567,18 +583,91 @@ def compile_source():
     for i, op in enumerate(operations):
         if op[0].name == "main":
             index = i
+            break
 
     main_operations = operations.pop(index)
-    main_variables = variables.pop(index)
 
-    for op, var in zip(operations, variables):
-       s += compile_function(op, var)
+    for op in operations:
+        s += compile_function(op)
 
     # the epilog in python is the magic that makes it run
     s += "if __name__ == \"__main__\":\n"
-    s += compile_function(main_operations, main_variables)
+    s += compile_function(main_operations)
 
     return s
+
+
+def compile_function(_operations: list[Operation]):
+    first_func = _operations.pop(0)
+    s = ""
+    s_indent = " " * 4
+
+    if first_func.name != "main":
+        s += "def {0:s}():\n".format(first_func.name)
+
+    # we start by defining local variable storage
+    s += f"{s_indent:s}variables = []\n"
+
+    s += compile_function_body(_operations, indent=4)
+    return s
+
+
+def compile_function_body(_operations: list[Operation], indent: int):
+    s = ""
+    s_indent = " " * indent
+    for op in _operations:
+        if isinstance(op, FunctionCall):
+            s += "{0:s}{1:s}(".format(s_indent, op.name)
+            for iarg, arg in enumerate(op.args, start=1):
+                if arg is None:
+                    break
+                elif isinstance(arg, Literal):
+                    s += "{0:d}".format(arg.value)
+                elif isinstance(arg, AutoVariable):
+                    s += "variables[{0:d}]".format(arg.index)
+                else:
+                    raise ValueError(f"type '{str(type(arg)):s}' not understood.")
+                if len(op.args) != iarg:
+                    s += ", "
+            s += ")\n"
+        elif isinstance(op, ExternVariable):
+            s += "{0:s}from extrn import {1:s}\n".format(s_indent, op.name)
+        elif isinstance(op, AutoAlloc):
+            s += "{0:s}variables.append(0)\n".format(s_indent)
+        elif isinstance(op, AutoAssign):
+            # looks funky, but it is assignment (op) that takes an argument
+            match op.value:
+                case Literal(value):
+                    s += "{0:s}variables[{1:d}] = {2:d}\n".format(s_indent, op.index, value)
+                case AutoVariable(index):
+                    s += "{0:s}variables[{1:d}] = variables[{2:d}]\n".format(s_indent, op.index, index)
+                case AutoBinaryOperation(operator, index, lhs, rhs):
+                    s += "{0:s}variables[{1:d}] = ".format(s_indent, op.index)
+                    s += compile_binop(operator, index, lhs, rhs)
+                    s += "\n"
+                case _:
+                    raise ValueError("Assignment of expressions are not supported." + str(op.value))
+        elif isinstance(op, ConditionalJump):
+            s += "{0:s}while ".format(s_indent)
+            match op.condition:
+                case Literal(value):
+                    s += "{0:d}".format(value)
+                case AutoVariable(index):
+                    s += "variables[{0:d}]".format(index)
+                case AutoBinaryOperation(operator, index, lhs, rhs):
+                    s += compile_binop(operator, index, lhs, rhs)
+                case _:
+                    unreachable()
+            s += ":\n"
+        elif isinstance(op, Jump):
+            s += "\n"
+        elif isinstance(op, list):
+            s += compile_function_body(op, indent + 4)
+        else:
+            raise RuntimeError(f"Operation '{str(type(op)):s}' not supported")
+
+    return s
+
 
 if __name__ == "__main__":
     ap = ArgumentParser(description="""
@@ -588,36 +677,34 @@ Provides a minimal standard library.
     """)
     ap.add_argument("input", help=".b source file to compile")
     ap.add_argument("-o", dest="output", default=None, help="output file of compilation. if not given will print program to screen.")
+    ap.add_argument("-v", dest="verbose", default=False, action="store_true", help="print verbose output")
     ap.add_argument("--debug", dest="debug", action="store_true", default=False, help="set flag to enable debug output")
     args = ap.parse_args()
     DEBUG = args.debug
+    VERBOSE = args.verbose
     filename = args.input
+
+    operations: list[Operation] = []
+    variables: list[Variable] = []
 
     s = ""
     with open(filename, "r") as f:
         for line in f:
-            s += line #[:-1]
+            s += line
 
-    print("-----------------------")
-    print(" B-COMPILER by CSTEIN  ")
-    print("    v. 0.0c            ")
-    print("                       ")
-    print("-----------------------")
-    print("                       ")
-    print("---- input program ----")
-    print(s)
-    # print("\n----   lexer   ----\n")
-    p = Lexer(l = 0, r = 0)
-    parse(s, p)
-    if DEBUG: print("\n---- functions ----\n")
-    if DEBUG: print(operations)
-    if DEBUG: print("\n---- variables ----\n")
-    if DEBUG: print(variables)
-    print("\n--- compiled source ---\n")
-    output = compile_source()
+    verbose_info("---- input program ----")
+    verbose_info(s)
+    p = Lexer(l=0, r=0)
+    operations, variables = parse(s, p, operations, variables)
+    debug_info("\n---- functions ----\n")
+    debug_info(operations)
+    debug_info("\n---- variables ----\n")
+    debug_info(variables)
+    debug_info("\n--- compiled source ---\n")
+    output = compile_source(operations)
+    verbose_info(output)
     if args.output is not None:
         with open(args.output, "w") as f:
             f.write(output)
         os.chmod(args.output, 0o744)
-    else:
-        print(output)
+        verbose_info(f"compiled to '{args.output}'")

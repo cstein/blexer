@@ -1,7 +1,5 @@
 main() {
-    auto a;
-    auto b;
-    auto c;
+    auto a, b, c;
     a = 0;
     b = 0;
     a = 2 + 71;
